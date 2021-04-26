@@ -9,27 +9,16 @@ function createRunsQuery(
   repo: string,
   workflowId: string,
   status: string,
-  branch?: string,
-  event?: string
+  branch: string
 ): Octokit.RequestOptions {
-  const request =
-    branch === undefined
-      ? {
-          owner,
-          repo,
-          // eslint-disable-next-line @typescript-eslint/camelcase
-          workflow_id: workflowId,
-          status
-        }
-      : {
-          owner,
-          repo,
-          // eslint-disable-next-line @typescript-eslint/camelcase
-          workflow_id: workflowId,
-          status,
-          branch,
-          event
-        }
+  const request = {
+    owner,
+    repo,
+    // eslint-disable-next-line @typescript-eslint/camelcase
+    workflow_id: workflowId,
+    status,
+    branch
+  }
 
   return octokit.actions.listWorkflowRuns.endpoint.merge(request)
 }
@@ -39,31 +28,24 @@ async function cancelDuplicates(
   selfRunId: string,
   owner: string,
   repo: string,
-  workflowId?: string,
-  branch?: string,
-  event?: string
+  branch: string
 ): Promise<void> {
   const octokit = new github.GitHub(token)
 
   // Determine the workflow to reduce the result set, or reference another workflow
-  let resolvedId = ''
-  if (workflowId === undefined) {
-    const reply = await octokit.actions.getWorkflowRun({
-      owner,
-      repo,
-      // eslint-disable-next-line @typescript-eslint/camelcase
-      run_id: Number.parseInt(selfRunId)
-    })
+  const reply = await octokit.actions.getWorkflowRun({
+    owner,
+    repo,
+    // eslint-disable-next-line @typescript-eslint/camelcase
+    run_id: Number.parseInt(selfRunId)
+  })
 
-    resolvedId = reply.data.workflow_url.split('/').pop() || ''
-    if (!(resolvedId.length > 0)) {
-      throw new Error('Could not resolve workflow')
-    }
-  } else {
-    resolvedId = workflowId
+  const workflowId = reply.data.workflow_url.split('/').pop() || ''
+  if (!(workflowId.length > 0)) {
+    throw new Error('Could not resolve workflow')
   }
 
-  core.info(`Workflow ID is: ${resolvedId}`)
+  core.info(`Workflow ID is: ${workflowId}`)
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const sorted = new treemap.TreeMap<number, any>()
@@ -72,10 +54,9 @@ async function cancelDuplicates(
       octokit,
       owner,
       repo,
-      resolvedId,
+      workflowId,
       status,
-      branch,
-      event
+      branch
     )
     for await (const item of octokit.paginate.iterator(listRuns)) {
       // There is some sort of bug where the pagination URLs point to a
@@ -90,102 +71,37 @@ async function cancelDuplicates(
     }
   }
 
+  core.info(`Found queued/in_progress workflows: ${sorted.size}`)
+
   // If a workflow was provided process everything
-  let matched = workflowId !== undefined
-  const heads = new Set()
   for (const entry of sorted.backward()) {
     const element = entry[1]
+
+    const runId = element.id.toString()
+    const event = element.event.toString()
+
     core.info(
-      `${element.id} : ${element.event} : ${element.workflow_url} : ${element.status} : ${element.run_number}`
+      `Processing run ID: ${runId} [${event} : ${element.workflow_url} : ${element.status} : ${element.run_number}]`
     )
 
-    if (!matched) {
-      if (element.id.toString() !== selfRunId) {
-        // Skip everything up to this run
-        continue
-      }
-
-      matched = true
-      core.info(`Matched ${selfRunId}`)
-    }
-
-    if (
-      'completed' === element.status.toString() ||
-      !['push', 'pull_request'].includes(element.event.toString())
-    ) {
+    if (runId >= selfRunId) {
+      core.info(`Skipping larger run ID: ${runId}`)
       continue
     }
 
-    // This is a set of one in the non-schedule case, otherwise everything is a candidate
-    const head = `${element.head_repository.full_name}/${element.head_branch}`
-    if (!heads.has(head)) {
-      core.info(`First: ${head}`)
-      heads.add(head)
+    if ('completed' === element.status.toString()) {
+      core.info(`Skipping completed run ID: ${runId}`)
       continue
     }
 
-    core.info(`Cancelling: ${head}`)
+    if (!['push', 'pull_request'].includes(event)) {
+      core.info(`Skipping completed or non-event matching run ID: ${runId}`)
+      continue
+    }
+
+    core.info(`Cancelling run ID: ${runId}`)
 
     await cancelRun(octokit, owner, repo, element.id)
-  }
-}
-
-async function run(): Promise<void> {
-  try {
-    const token = core.getInput('token')
-
-    core.info(token)
-
-    const selfRunId = getRequiredEnv('GITHUB_RUN_ID')
-    const repository = getRequiredEnv('GITHUB_REPOSITORY')
-    const eventName = getRequiredEnv('GITHUB_EVENT_NAME')
-
-    const [owner, repo] = repository.split('/')
-    const branchPrefix = 'refs/heads/'
-    const tagPrefix = 'refs/tags/'
-
-    if ('schedule' === eventName) {
-      const workflowId = core.getInput('workflow')
-      if (!(workflowId.length > 0)) {
-        throw new Error('Workflow must be specified for schedule event type')
-      }
-      await cancelDuplicates(token, selfRunId, owner, repo, workflowId)
-      return
-    }
-
-    if (!['push', 'pull_request'].includes(eventName)) {
-      core.info('Skipping unsupported event')
-      return
-    }
-
-    const pullRequest = 'pull_request' === eventName
-
-    let branch = getRequiredEnv(pullRequest ? 'GITHUB_HEAD_REF' : 'GITHUB_REF')
-    if (!pullRequest && !branch.startsWith(branchPrefix)) {
-      if (branch.startsWith(tagPrefix)) {
-        core.info(`Skipping tag build`)
-        return
-      }
-      const message = `${branch} was not an expected branch ref (refs/heads/).`
-      throw new Error(message)
-    }
-    branch = branch.replace(branchPrefix, '')
-
-    core.info(
-      `Branch is ${branch}, repo is ${repo}, and owner is ${owner}, and id is ${selfRunId}`
-    )
-
-    cancelDuplicates(
-      token,
-      selfRunId,
-      owner,
-      repo,
-      undefined,
-      branch,
-      eventName
-    )
-  } catch (error) {
-    core.setFailed(error.message)
   }
 }
 
@@ -206,9 +122,51 @@ async function cancelRun(
     })
     core.info(`Previous run (id ${id}) cancelled, status = ${reply.status}`)
   } catch (error) {
-    core.info(
-      `[warn] Could not cancel run (id ${id}): [${error.status}] ${error.message}`
+    core.warning(
+      `Could not cancel run (id ${id}): [${error.status}] ${error.message}`
     )
+  }
+}
+
+async function run(): Promise<void> {
+  try {
+    const token = core.getInput('github-token')
+
+    core.info(token)
+
+    const selfRunId = getRequiredEnv('GITHUB_RUN_ID')
+    const repository = getRequiredEnv('GITHUB_REPOSITORY')
+    const eventName = getRequiredEnv('GITHUB_EVENT_NAME')
+
+    const [owner, repo] = repository.split('/')
+    const branchPrefix = 'refs/heads/'
+    const tagPrefix = 'refs/tags/'
+
+    if (!['push', 'pull_request'].includes(eventName)) {
+      core.info(`Skipping unsupported event: ${eventName}`)
+      return
+    }
+
+    const pullRequest = 'pull_request' === eventName
+
+    let branch = getRequiredEnv(pullRequest ? 'GITHUB_HEAD_REF' : 'GITHUB_REF')
+    if (!pullRequest && !branch.startsWith(branchPrefix)) {
+      if (branch.startsWith(tagPrefix)) {
+        core.info(`Skipping tag build: ${branch}`)
+        return
+      }
+      const message = `${branch} was not an expected branch ref (refs/heads/).`
+      throw new Error(message)
+    }
+    branch = branch.replace(branchPrefix, '')
+
+    core.info(
+      `Branch is ${branch}, repo is ${repo}, and owner is ${owner}, and id is ${selfRunId}`
+    )
+
+    cancelDuplicates(token, selfRunId, owner, repo, branch)
+  } catch (error) {
+    core.setFailed(error.message)
   }
 }
 
