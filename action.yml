@@ -2,12 +2,9 @@ name: 'Cancel Previous Workflow Runs'
 description: 'Cancels all previous runs of this workflow'
 author: 'n1hility'
 inputs:
-  token:
+  github-token:
     description: The GITHUB_TOKEN secret of this github workflow
     required: true
-  workflow:
-    description: The filename of the workflow to limit runs on (only applies to schedule events)
-    required: false
 runs:
   using: 'node12'
   main: 'dist/index.js'
