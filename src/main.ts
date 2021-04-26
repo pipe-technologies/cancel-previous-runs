@@ -41,7 +41,7 @@ async function cancelDuplicates(
   })
 
   const workflowId = reply.data.workflow_url.split('/').pop() || ''
-  if (!(workflowId.length > 0)) {
+  if (workflowId === undefined || workflowId.length === 0) {
     throw new Error('Could not resolve workflow')
   }
 
