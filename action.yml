@@ -5,6 +5,9 @@ inputs:
   github-token:
     description: The GITHUB_TOKEN secret of this github workflow
     required: true
+  ignore-branches:
+    description: Comma-separated list of branches to ignore when canceling workflows
+    required: false
 runs:
   using: 'node12'
   main: 'dist/index.js'

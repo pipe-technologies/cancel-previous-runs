@@ -2043,7 +2043,7 @@ function cancelDuplicates(token, selfRunId, owner, repo, branch) {
             run_id: Number.parseInt(selfRunId)
         });
         const workflowId = reply.data.workflow_url.split('/').pop() || '';
-        if (!(workflowId.length > 0)) {
+        if (workflowId === undefined || workflowId.length === 0) {
             throw new Error('Could not resolve workflow');
         }
         core.info(`Workflow ID is: ${workflowId}`);
@@ -2118,7 +2118,10 @@ function run() {
     return __awaiter(this, void 0, void 0, function* () {
         try {
             const token = core.getInput('github-token');
-            core.info(token);
+            const ignoreBranches = core
+                .getInput('ignore-branches', { required: false })
+                .split(',');
+            core.info(`Ignore branches: ${ignoreBranches}`);
             const selfRunId = getRequiredEnv('GITHUB_RUN_ID');
             const repository = getRequiredEnv('GITHUB_REPOSITORY');
             const eventName = getRequiredEnv('GITHUB_EVENT_NAME');
@@ -2140,6 +2143,10 @@ function run() {
                 throw new Error(message);
             }
             branch = branch.replace(branchPrefix, '');
+            if (ignoreBranches.includes(branch)) {
+                core.info(`Igoring branch: ${branch}`);
+                return;
+            }
             core.info(`Branch is ${branch}, repo is ${repo}, and owner is ${owner}, and id is ${selfRunId}`);
             cancelDuplicates(token, selfRunId, owner, repo, branch);
         }
