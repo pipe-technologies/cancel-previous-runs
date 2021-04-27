@@ -131,8 +131,11 @@ async function cancelRun(
 async function run(): Promise<void> {
   try {
     const token = core.getInput('github-token')
+    const ignoreBranches = core
+      .getInput('ignore-branches', {required: false})
+      .split(',')
 
-    core.info(token)
+    core.info(`Ignore branches: ${ignoreBranches}`)
 
     const selfRunId = getRequiredEnv('GITHUB_RUN_ID')
     const repository = getRequiredEnv('GITHUB_REPOSITORY')
@@ -159,6 +162,10 @@ async function run(): Promise<void> {
       throw new Error(message)
     }
     branch = branch.replace(branchPrefix, '')
+    if (ignoreBranches.indexOf(branch) !== -1) {
+      core.info(`Igoring branch: ${branch}`)
+      return
+    }
 
     core.info(
       `Branch is ${branch}, repo is ${repo}, and owner is ${owner}, and id is ${selfRunId}`
