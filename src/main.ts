@@ -162,7 +162,7 @@ async function run(): Promise<void> {
       throw new Error(message)
     }
     branch = branch.replace(branchPrefix, '')
-    if (ignoreBranches.indexOf(branch) !== -1) {
+    if (ignoreBranches.includes(branch)) {
       core.info(`Igoring branch: ${branch}`)
       return
     }
